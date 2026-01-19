@@ -368,10 +368,102 @@ class RenderConfig:
     """
     cell: int = 28
     dot_ratio: float = 0.72
-    margin: int = 36
+    margin: int = 84
     invert: bool = False
     background: int = 255
     foreground: int = 0
+
+    # ---- Corner L fiducials (solid L blocks, not dots) ----
+    draw_corner_L: bool = True
+    fiducial_gap_cells: float = 0.8   # how far the L sits away from the data grid (in cell units)
+
+    fiducial_arm_len_cells: float = 2  # L arm length (in cell units)
+    fiducial_thickness_cells: float = 0.6  # L stroke thickness (in cell units)
+
+
+def _draw_filled_dot(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int, color: int) -> None:
+    """Draw one filled circular dot centered at (cx, cy)."""
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=color)
+
+def draw_three_L_corner_fiducials(
+    draw: ImageDraw.ImageDraw,
+    cfg: RenderConfig,
+    grid_origin_x: int,
+    grid_origin_y: int,
+    grid_size_cells: int = 11,
+) -> None:
+    """
+    Draw 3 SOLID L-shaped corner fiducials in the quiet zone (margin),
+    NOT inside the 11x11 data grid.
+
+    Corners used:
+      - Top-Left (TL)
+      - Top-Right (TR)
+      - Bottom-Left (BL)
+    Bottom-Right is intentionally empty for orientation ("missing corner" cue).
+
+    Each L is drawn as two filled rectangles (horizontal arm + vertical arm).
+    This produces a continuous, solid L marker (industrial fiducial style).
+    """
+    if not cfg.draw_corner_L:
+        return
+
+    # Safety: need enough margin to draw L without clipping
+    if cfg.margin < cfg.cell:
+        raise ValueError("RenderConfig.margin should be >= cell when draw_corner_L=True")
+
+    N = grid_size_cells
+    grid_w = N * cfg.cell
+    grid_h = N * cfg.cell
+
+    # Convert cell-based params to pixels
+    gap = int(round(cfg.cell * cfg.fiducial_gap_cells))
+    arm = int(round(cfg.cell * cfg.fiducial_arm_len_cells))
+    th  = max(1, int(round(cfg.cell * cfg.fiducial_thickness_cells)))
+
+    # Grid bounding box in image coordinates
+    gx0 = grid_origin_x
+    gy0 = grid_origin_y
+    gx1 = grid_origin_x + grid_w
+    gy1 = grid_origin_y + grid_h
+
+    # Helper to draw a solid L given corner anchor and directions
+    # dx, dy define where the arms extend (+1 or -1)
+    def draw_L_at(anchor_x: int, anchor_y: int, dx: int, dy: int) -> None:
+        """
+        anchor_x, anchor_y: the OUTER corner point of the L (near the grid corner but in margin)
+        dx: horizontal arm direction (+1 right, -1 left)
+        dy: vertical arm direction (+1 down,  -1 up)
+        """
+        # Horizontal arm rectangle
+        # It starts at anchor and extends by 'arm' in dx direction
+        if dx > 0:
+            x0, x1 = anchor_x, anchor_x + arm
+        else:
+            x0, x1 = anchor_x - arm, anchor_x
+        y0, y1 = anchor_y - th // 2, anchor_y + (th - th // 2)
+
+        draw.rectangle([x0, y0, x1, y1], fill=cfg.foreground)
+
+        # Vertical arm rectangle
+        if dy > 0:
+            y0v, y1v = anchor_y, anchor_y + arm
+        else:
+            y0v, y1v = anchor_y - arm, anchor_y
+        x0v, x1v = anchor_x - th // 2, anchor_x + (th - th // 2)
+
+        draw.rectangle([x0v, y0v, x1v, y1v], fill=cfg.foreground)
+
+    # Place anchors just outside the grid corners (in margin)
+    # TL: anchor near (gx0, gy0) but shifted outward by gap
+    TL = (gx0 - gap, gy0 - gap)
+    TR = (gx1 + gap, gy0 - gap)
+    BL = (gx0 - gap, gy1 + gap)
+
+    # Draw 3 Ls
+    draw_L_at(TL[0], TL[1], dx=+1, dy=+1)  # TL extends right and down
+    draw_L_at(TR[0], TR[1], dx=-1, dy=+1)  # TR extends left and down
+    draw_L_at(BL[0], BL[1], dx=+1, dy=-1)  # BL extends right and up
 
 
 def render_11x11_dotgrid(
@@ -399,6 +491,8 @@ def render_11x11_dotgrid(
 
     img = Image.new("L", (W, H), color=cfg.background)
     draw = ImageDraw.Draw(img)
+    grid_origin_x = cfg.margin
+    grid_origin_y = cfg.margin
 
     dot_d = int(cfg.cell * cfg.dot_ratio)
     r = dot_d // 2
@@ -418,6 +512,11 @@ def render_11x11_dotgrid(
 
             # Draw filled circle
             draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=cfg.foreground)
+
+    grid_origin_x = cfg.margin
+    grid_origin_y = cfg.margin
+    ...
+    draw_three_L_corner_fiducials(draw, cfg, grid_origin_x, grid_origin_y, 11)
 
     img.save(out_path)
 
