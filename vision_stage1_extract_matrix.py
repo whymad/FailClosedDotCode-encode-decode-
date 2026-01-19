@@ -1,4 +1,3 @@
-
 # vision_stage1_extract_matrix.py
 #
 # ============================================================
@@ -29,7 +28,9 @@ import numpy as np
 # =========================
 # USER SETTINGS (edit here)
 # =========================
-IMAGE_PATH = "ruggeddot11_111.png"   # <-- change to your filename
+IMAGE_PATH = "ruggeddot11_94645654262.png"   # <-- change to your filename
+
+#CROP_PAD_CELLS = 0.9   # 0.2~0.6
 
 GRID_N = 11
 
@@ -44,6 +45,16 @@ FID_GAP_CELLS = 0.8
 
 # Disk sampling radius relative to one cell size in the normalized square
 SAMPLE_RADIUS_RATIO = 0.30
+
+# Edge cells are most sensitive to crop/warp error.
+# We inset the sampling center a bit for r==0/r==10/c==0/c==10.
+EDGE_INSET_RATIO = 0.14   # in "cell" units; try 0.10~0.20
+
+# Use local contrast: (ring_mean - disk_mean) instead of raw mean.
+USE_LOCAL_CONTRAST = True
+RING_INNER_RATIO = 0.42   # ring inner radius as a fraction of cell
+RING_OUTER_RATIO = 0.49   # ring outer radius as a fraction of cell
+
 
 # Morphology closing kernel (solidify L fiducials)
 MORPH_CLOSE_K = 5  # try 3~9 if needed
@@ -202,7 +213,6 @@ def warp_to_data_square(gray: np.ndarray, TLp, TRp, BLp, out_size: int, gap_cell
         borderValue=255
     )
 
-    # Crop internal data square [shift .. shift+S)
     s0 = int(round(shift))
     s1 = s0 + out_size
     data_square = warped_full[s0:s1, s0:s1].copy()
@@ -247,6 +257,94 @@ def cell_means_disk(warped: np.ndarray, n: int, radius_ratio: float) -> np.ndarr
             means[r, c] = float(vals.mean()) if vals.size else 255.0
 
     return means
+
+def cell_scores_disk_vs_ring(
+    warped: np.ndarray,
+    n: int,
+    disk_ratio: float,
+    ring_inner_ratio: float,
+    ring_outer_ratio: float,
+    edge_inset_ratio: float,
+) -> np.ndarray:
+    """
+    Return an n×n "score" for each cell, using local contrast:
+
+        score = ring_mean - disk_mean
+
+    Intuition:
+      - For a dot cell: disk region is dark -> disk_mean low, ring_mean high -> score large positive
+      - For an empty cell: disk and ring both bright -> score near 0
+
+    This is MUCH more stable for corner cells and near fiducials than raw mean thresholding.
+
+    We also inset the sampling center for edge cells to avoid sampling outside the true dot area
+    when warp/crop is slightly off.
+
+    Parameters are expressed as ratios of one cell size.
+    """
+    H, W = warped.shape[:2]
+    assert H == W
+    S = float(H)
+    cell = S / n
+
+    # Radii in pixels
+    disk_r = max(2, int(cell * disk_ratio))
+    r_in = max(disk_r + 1, int(cell * ring_inner_ratio))
+    r_out = max(r_in + 1, int(cell * ring_outer_ratio))
+
+    # Precompute masks
+    size = 2 * r_out + 1
+    yy, xx = np.mgrid[0:size, 0:size]
+    cy = cx = r_out
+    rr2 = (xx - cx) ** 2 + (yy - cy) ** 2
+
+    disk_mask = rr2 <= disk_r ** 2
+    ring_mask = (rr2 >= r_in ** 2) & (rr2 <= r_out ** 2)
+
+    scores = np.zeros((n, n), dtype=np.float32)
+
+    inset_px = float(edge_inset_ratio) * cell
+
+    for r in range(n):
+        for c in range(n):
+            # nominal center
+            x = (c + 0.5) * cell
+            y = (r + 0.5) * cell
+
+            # ---- key trick: inset edge cells inward ----
+            if c == 0:
+                x += inset_px
+            elif c == n - 1:
+                x -= inset_px
+            if r == 0:
+                y += inset_px
+            elif r == n - 1:
+                y -= inset_px
+
+            cx_i = int(round(x))
+            cy_i = int(round(y))
+
+            x0 = max(0, cx_i - r_out)
+            x1 = min(int(S) - 1, cx_i + r_out)
+            y0 = max(0, cy_i - r_out)
+            y1 = min(int(S) - 1, cy_i + r_out)
+
+            patch = warped[y0:y1 + 1, x0:x1 + 1]
+
+            # align masks to patch
+            dx0 = x0 - (cx_i - r_out)
+            dy0 = y0 - (cy_i - r_out)
+            m_disk = disk_mask[dy0:dy0 + patch.shape[0], dx0:dx0 + patch.shape[1]]
+            m_ring = ring_mask[dy0:dy0 + patch.shape[0], dx0:dx0 + patch.shape[1]]
+
+            disk_vals = patch[m_disk].astype(np.float32)
+            ring_vals = patch[m_ring].astype(np.float32)
+
+            disk_mean = float(disk_vals.mean()) if disk_vals.size else 255.0
+            ring_mean = float(ring_vals.mean()) if ring_vals.size else 255.0
+
+            scores[r, c] = ring_mean - disk_mean  # dot => positive
+    return scores
 
 
 def otsu_threshold_on_means(means: np.ndarray) -> float:
@@ -351,14 +449,24 @@ def main() -> None:
     )
 
     # 6) Sample 11x11 means
-    means = cell_means_disk(data_square, n=GRID_N, radius_ratio=SAMPLE_RADIUS_RATIO)
-
-    # 7) Threshold on means (Otsu)
-    thr = otsu_threshold_on_means(means)
-
-    # 8) Convert to matrix
-    # Your printed dots are black, so "dark_is_1" is the correct polarity for these PNGs.
-    mat = means_to_matrix(means, thr, dark_is_1=True)
+    if USE_LOCAL_CONTRAST:
+        scores = cell_scores_disk_vs_ring(
+            data_square,
+            n=GRID_N,
+            disk_ratio=SAMPLE_RADIUS_RATIO,
+            ring_inner_ratio=RING_INNER_RATIO,
+            ring_outer_ratio=RING_OUTER_RATIO,
+            edge_inset_ratio=EDGE_INSET_RATIO,
+        )
+        # Now Otsu threshold on "scores" (not on raw means).
+        # Dot cells should have larger positive scores.
+        thr = otsu_threshold_on_means(scores)
+        # For scores: score > thr => dot(1)
+        mat = [[1 if float(scores[r, c]) > thr else 0 for c in range(GRID_N)] for r in range(GRID_N)]
+    else:
+        means = cell_means_disk(data_square, n=GRID_N, radius_ratio=SAMPLE_RADIUS_RATIO)
+        thr = otsu_threshold_on_means(means)
+        mat = means_to_matrix(means, thr, dark_is_1=True)
 
     # 9) Output only matrix (as requested)
     print_matrix(mat)

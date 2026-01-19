@@ -375,7 +375,7 @@ class RenderConfig:
 
     # ---- Corner L fiducials (solid L blocks, not dots) ----
     draw_corner_L: bool = True
-    fiducial_gap_cells: float = 0.8   # how far the L sits away from the data grid (in cell units)
+    fiducial_gap_cells: float = 0.6  # how far the L sits away from the data grid (in cell units)
 
     fiducial_arm_len_cells: float = 2  # L arm length (in cell units)
     fiducial_thickness_cells: float = 0.6  # L stroke thickness (in cell units)
