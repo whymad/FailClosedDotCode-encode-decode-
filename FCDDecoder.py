@@ -36,7 +36,7 @@ import numpy as np
 # ===================== USER EDIT AREA =======================
 # ============================================================
 
-IMAGE_PATH = "ruggeddot11_123454321.png"
+IMAGE_PATH = "ruggeddot11_6980143511468194.png"
 
 # Must match encoder
 INTERLEAVE_STEP = 37

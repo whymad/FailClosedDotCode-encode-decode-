@@ -28,7 +28,7 @@ import numpy as np
 # =========================
 # USER SETTINGS (edit here)
 # =========================
-IMAGE_PATH = "ruggeddot11_94645654262.png"   # <-- change to your filename
+IMAGE_PATH = "ruggeddot11_6980143511468194.png"   # <-- change to your filename
 
 #CROP_PAD_CELLS = 0.9   # 0.2~0.6
 
